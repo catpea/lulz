@@ -1,0 +1,20 @@
+{
+  "name": "lulz",
+  "version": "1.0.0",
+  "description": "A reactive dataflow system inspired by Visual Programming, FFmpeg filtergraph and Node-RED",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test",
+    "examples": "node examples.js"
+  },
+  "keywords": [
+    "dataflow",
+    "reactive",
+    "flow",
+    "pipeline",
+    "node-red"
+  ],
+  "author": "",
+  "license": "MIT"
+}
