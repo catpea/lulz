@@ -1,6 +1,6 @@
 {
   "name": "lulz",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A reactive dataflow system inspired by Visual Programming, FFmpeg filtergraph and Node-RED",
   "type": "module",
   "main": "index.js",
