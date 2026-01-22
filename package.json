@@ -1,6 +1,6 @@
 {
   "name": "lulz",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A reactive dataflow system inspired by Visual Programming, FFmpeg filtergraph and Node-RED",
   "type": "module",
   "main": "index.js",
@@ -16,7 +16,6 @@
     "pipeline",
     "node-red"
   ],
-
   "author": "catpea (https://github.com/catpea)",
   "license": "MIT",
   "repository": {
@@ -31,5 +30,4 @@
     "type": "github",
     "url": "https://github.com/sponsors/catpea"
   }
-
 }
