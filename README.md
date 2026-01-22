@@ -11,7 +11,7 @@ npm install lulz
 ## Quick Start
 
 ```javascript
-const { flow, Inject, Debug } = require('./index');
+import { flow, Inject, Debug } from 'lulz';
 
 const app = flow([
   [Inject({ payload: 'Hello World!' }), Debug({ name: 'output' })],
