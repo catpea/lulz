@@ -1,6 +1,6 @@
 {
   "name": "lulz",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "A reactive dataflow system that makes coders happy",
   "type": "module",
   "main": "index.js",
@@ -23,7 +23,6 @@
     "node-red",
     "rxjs"
   ],
-
   "author": "catpea (https://github.com/catpea)",
   "license": "MIT",
   "repository": {
