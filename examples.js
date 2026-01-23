@@ -1,317 +1,289 @@
 /**
- * lulz Examples
- *
- * Various patterns and use cases
+ * lulz - Examples
+ * 
+ * Various usage patterns and demonstrations.
  */
 
 import {
   flow,
   subflow,
   compose,
-  Inject,
-  Debug,
-  Function as Fn,
-  Change,
-  Switch,
-  Template,
-  Delay,
-  Join,
-  Split,
+  parallel,
+  series,
+  inject,
+  debug,
+  func,
+  change,
+  template,
+  delay,
+  map,
+  filter,
+  scan,
+  debounce,
+  take,
+  pairwise,
+  tap,
 } from './index.js';
 
-// Custom logger to capture output
-const logs = [];
-const logger = (...args) => {
-  logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '));
-  console.log(...args);
-};
 
-// ============================================================
-// EXAMPLE 1: Basic pipe connection
-// ============================================================
+// ─────────────────────────────────────────────────────────────
+// Example 1: Basic Inject → Debug
+// ─────────────────────────────────────────────────────────────
 
-console.log('\n=== Example 1: Basic Inject → Debug ===\n');
+console.log('\n═══ Example 1: Basic Inject → Debug ═══\n');
 
 const example1 = flow([
-  [Inject({ payload: 'Hello FlowGraph!', once: true }), Debug({ name: 'output', logger })],
+  [inject({ payload: 'Hello lulz!', once: true }), debug({ name: 'output' })],
 ]);
 
 example1.start();
 
-// ============================================================
-// EXAMPLE 2: Series processing with [a, b, c] syntax
-// ============================================================
 
-console.log('\n=== Example 2: Series Processing ===\n');
+// ─────────────────────────────────────────────────────────────
+// Example 2: EventEmitter API
+// ─────────────────────────────────────────────────────────────
 
-// Each step adds to the message
+console.log('\n═══ Example 2: EventEmitter API ═══\n');
+
+const example2 = flow([
+  ['input', func({ func: (msg) => ({ ...msg, payload: msg.payload.toUpperCase() }) }), 'output'],
+]);
+
+// Listen to output pipe
+example2.on('output', (packet) => {
+  console.log('[Listener] Received:', packet.payload);
+});
+
+// Inject via emit
+example2.emit('input', { payload: 'hello via emit!' });
+
+
+// ─────────────────────────────────────────────────────────────
+// Example 3: Series Processing (Default)
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Example 3: Series Processing ═══\n');
+
 function addStep(name) {
   return function(options) {
     return (send, packet) => {
-      const steps = packet.steps || [];
-      logger(`[${name}] Processing...`);
-      send({ ...packet, steps: [...steps, name] });
+      console.log(`[${name}] Processing...`);
+      send({ ...packet, steps: [...(packet.steps || []), name] });
     };
   };
 }
 
-const example2 = flow([
-  ['input', [addStep('validate'), addStep('transform'), addStep('enrich')], Debug({ name: 'result', logger })],
-]);
-
-example2.inject('input', { payload: { data: 'test' } });
-
-// ============================================================
-// EXAMPLE 3: Fan-out (parallel processing)
-// ============================================================
-
-console.log('\n=== Example 3: Fan-out Processing ===\n');
-
-function processA(options) {
-  return (send, packet) => {
-    logger('[A] Fast processing');
-    send({ ...packet, processedBy: 'A' });
-  };
-}
-
-function processB(options) {
-  return (send, packet) => {
-    logger('[B] Detailed processing');
-    send({ ...packet, processedBy: 'B', extra: 'details' });
-  };
-}
-
 const example3 = flow([
-  ['input', processA, processB, 'output'], // Both receive same input
-  ['output', Debug({ name: 'fan-out-result', logger })],
+  ['input', addStep('validate'), addStep('transform'), addStep('save'), debug({ name: 'result', complete: true })],
 ]);
 
-example3.inject('input', { payload: 'parallel test' });
+example3.emit('input', { payload: { data: 'test' } });
 
-// ============================================================
-// EXAMPLE 4: Mixed pre-configured and auto-configured functions
-// ============================================================
 
-console.log('\n=== Example 4: Pre-configured Functions ===\n');
+// ─────────────────────────────────────────────────────────────
+// Example 4: Parallel Processing with []
+// ─────────────────────────────────────────────────────────────
 
-function multiplier(options) {
-  const factor = options.factor || 1;
-  return (send, packet) => {
-    send({ ...packet, payload: packet.payload * factor });
+console.log('\n═══ Example 4: Parallel Processing ═══\n');
+
+function process(name, delay = 0) {
+  return function(options) {
+    return (send, packet) => {
+      setTimeout(() => {
+        console.log(`[${name}] Done`);
+        send({ ...packet, processor: name });
+      }, delay);
+    };
   };
 }
 
 const example4 = flow([
-  ['input', [
-    multiplier({ factor: 2 }),   // Pre-configured: ×2
-    multiplier,                   // Auto-configured with {}: ×1
-    multiplier({ factor: 5 }),   // Pre-configured: ×5
-  ], Debug({ name: 'multiplied', logger })],
+  ['input', [process('fast', 10), process('slow', 50), process('medium', 30)], 'output'],
+  ['output', debug({ name: 'parallel-result' })],
 ]);
 
-example4.inject('input', { payload: 10 }); // 10 → 20 → 20 → 100
+example4.emit('input', { payload: 'parallel test' });
 
-// ============================================================
-// EXAMPLE 5: Conditional routing with Switch
-// ============================================================
 
-console.log('\n=== Example 5: Conditional Routing ===\n');
+// ─────────────────────────────────────────────────────────────
+// Example 5: Helper Functions
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Example 5: series() and parallel() Helpers ═══\n');
+
+function multiply(n) {
+  return function(options) {
+    return (send, packet) => {
+      send({ ...packet, payload: packet.payload * n });
+    };
+  };
+}
 
 const example5 = flow([
-  ['input', Switch({
-    property: 'payload.temperature',
-    rules: [
-      { type: 'gte', value: 30 },
-    ]
-  }), 'hot'],
-  
-  ['input', Switch({
-    property: 'payload.temperature',
-    rules: [
-      { type: 'lt', value: 30 },
-    ]
-  }), 'cold'],
-  
-  ['hot', Debug({ name: '🔥 HOT', logger })],
-  ['cold', Debug({ name: '❄️ COLD', logger })],
+  // series: 10 → 20 → 60 → 120
+  ['input', series(multiply(2), multiply(3), multiply(2)), debug({ name: 'series-result' })],
 ]);
 
-example5.inject('input', { payload: { temperature: 35, city: 'Phoenix' } });
-example5.inject('input', { payload: { temperature: 15, city: 'Seattle' } });
+example5.emit('input', { payload: 10 });
 
-// ============================================================
-// EXAMPLE 6: Template rendering
-// ============================================================
 
-console.log('\n=== Example 6: Template Rendering ===\n');
+// ─────────────────────────────────────────────────────────────
+// Example 6: Subflows (Reusable Components)
+// ─────────────────────────────────────────────────────────────
 
-const example6 = flow([
-  ['input', Template({
-    template: '{{payload.name}} from {{payload.city}} says: "{{payload.message}}"'
-  }), Debug({ name: 'message', logger })],
+console.log('\n═══ Example 6: Subflows ═══\n');
+
+// Create reusable sanitizer
+const sanitizer = subflow([
+  ['in', func({ func: (msg) => ({
+    ...msg,
+    payload: String(msg.payload).trim().toLowerCase()
+  })}), 'out'],
 ]);
 
-example6.inject('input', { 
-  payload: { 
-    name: 'Alice', 
-    city: 'Wonderland',
-    message: 'Down the rabbit hole!'
-  } 
+// Create reusable validator
+const validator = subflow([
+  ['in', func({ func: (msg) => ({
+    ...msg,
+    payload: msg.payload,
+    valid: msg.payload.length > 0
+  })}), 'out'],
+]);
+
+// Compose them
+const pipeline = compose(sanitizer, validator);
+
+pipeline.on('out', (packet) => {
+  console.log('[Pipeline Result]', packet);
 });
 
-// ============================================================
-// EXAMPLE 7: Subflow embedding
-// ============================================================
+pipeline.emit('in', { payload: '  HELLO WORLD  ' });
 
-console.log('\n=== Example 7: Subflow (Reusable Component) ===\n');
 
-// Create a reusable "sanitizer" subflow
-const sanitizer = subflow([
-  ['in', Fn({
-    func: (msg) => ({
-      ...msg,
-      payload: String(msg.payload).trim().toLowerCase()
-    })
-  }), 'out'],
-]);
+// ─────────────────────────────────────────────────────────────
+// Example 7: RxJS-Style Operators
+// ─────────────────────────────────────────────────────────────
 
-// Use it in main flow
+console.log('\n═══ Example 7: RxJS-Style Operators ═══\n');
+
 const example7 = flow([
-  ['input', 'process'],
-  ['process', Debug({ name: 'sanitized', logger })],
+  ['input', 
+    map({ fn: (x) => x * 2 }),
+    filter({ predicate: (x) => x > 5 }),
+    scan({ reducer: (acc, x) => acc + x, initial: 0 }),
+    debug({ name: 'rx-result' })
+  ],
 ]);
 
-// Wire up subflow
-example7.pipes['input'].connect(sanitizer._input);
-sanitizer._output.connect(example7.pipes['process']);
+[1, 2, 3, 4, 5].forEach(n => {
+  example7.emit('input', { payload: n });
+});
 
-example7.inject('input', { payload: '  HELLO WORLD  ' });
 
-// ============================================================
-// EXAMPLE 8: Blog builder (original use case)
-// ============================================================
+// ─────────────────────────────────────────────────────────────
+// Example 8: Blog Builder Pattern
+// ─────────────────────────────────────────────────────────────
 
-console.log('\n=== Example 8: Blog Builder Pattern ===\n');
+console.log('\n═══ Example 8: Blog Builder ═══\n');
 
-// Simulated producer functions
+// Simulated producers
 function socket(channel) {
   return (send) => {
-    logger(`[socket] Listening on: ${channel}`);
-    // Simulate receiving data
+    console.log(`[socket] Listening: ${channel}`);
     setTimeout(() => {
-      send({ payload: { type: 'new-post', id: 123 }, channel });
-    }, 50);
+      send({ payload: { type: 'new-post', id: 123 }, topic: channel });
+    }, 100);
   };
 }
 
 function watch(folder) {
   return (send) => {
-    logger(`[watch] Watching: ${folder}`);
-    // Simulate file change
+    console.log(`[watch] Watching: ${folder}`);
     setTimeout(() => {
-      send({ payload: { type: 'file-changed', path: `${folder}/image.png` }, folder });
-    }, 75);
+      send({ payload: { type: 'file-changed', path: `${folder}/image.png` }, topic: folder });
+    }, 150);
   };
 }
 
 // Processing functions
 function cover(options) {
   return (send, packet) => {
-    logger('[cover] Generating cover image...');
+    console.log('[cover] Generating cover...');
     send({ ...packet, cover: true });
   };
 }
 
 function audio(options) {
   return (send, packet) => {
-    logger('[audio] Processing audio...');
+    console.log('[audio] Processing audio...');
     send({ ...packet, audio: true });
   };
 }
 
 function post(options) {
   return (send, packet) => {
-    logger('[post] Building post...');
+    console.log('[post] Building post...');
     send({ ...packet, built: true });
   };
 }
 
 function assets(options) {
   return (send, packet) => {
-    logger('[assets] Processing asset:', packet.payload?.path);
+    console.log('[assets] Processing asset');
     send(packet);
   };
 }
 
 function pagerizer(options) {
   return (send, packet) => {
-    logger('[pagerizer] Updating pagination...');
-    send({ ...packet, paginated: true });
+    console.log('[pagerizer] Updating pagination');
+    send(packet);
   };
 }
 
 const blogBuilder = flow([
-  [socket('post'), 'post'],               // Socket events → post pipe
-  [watch('assets'), 'asset'],             // File watcher → asset pipe
-  ['post', Debug({ name: 'new-post', logger })],           // Log new posts
-  ['asset', assets],                      // Process assets
-  ['post', cover, audio, post, 'updated'], // Fan-out: cover, audio, post all run
-  ['updated', pagerizer, Debug({ name: 'updated', logger })],
+  [socket('post'), 'post'],
+  [watch('assets'), 'asset'],
+  ['post', debug({ name: 'new-post' })],
+  ['asset', assets],
+  // Fan-out: cover, audio, post all run in parallel
+  ['post', [cover, audio, post], 'updated'],
+  ['updated', pagerizer, debug({ name: 'updated' })],
 ], { username: 'alice' });
 
 blogBuilder.start();
 
-// ============================================================
-// EXAMPLE 9: Series with mixed fan-out
-// ============================================================
 
-console.log('\n=== Example 9: Complex Pipeline ===\n');
+// ─────────────────────────────────────────────────────────────
+// Example 9: Temperature Monitor with Pairwise
+// ─────────────────────────────────────────────────────────────
 
-function validate(options) {
-  return (send, packet) => {
-    if (packet.payload) {
-      logger('[validate] ✓ Valid');
-      send(packet);
-    } else {
-      logger('[validate] ✗ Invalid - dropped');
-    }
-  };
-}
+console.log('\n═══ Example 9: Temperature Delta ═══\n');
 
-function enrichA(options) {
-  return (send, packet) => {
-    logger('[enrichA] Adding metadata A');
-    send({ ...packet, metaA: true });
-  };
-}
-
-function enrichB(options) {
-  return (send, packet) => {
-    logger('[enrichB] Adding metadata B');
-    send({ ...packet, metaB: true });
-  };
-}
-
-function finalize(options) {
-  return (send, packet) => {
-    logger('[finalize] Completing...');
-    send({ ...packet, finalized: true });
-  };
-}
-
-// Complex pipeline: validate → (enrichA + enrichB in parallel) → finalize
-const example9 = flow([
-  ['input', [validate], 'validated'],     // Series: just validate
-  ['validated', enrichA, enrichB, 'enriched'], // Fan-out: both enrichers
-  ['enriched', [finalize], Debug({ name: 'final', logger })], // Series: finalize
+const tempMonitor = flow([
+  ['temp',
+    pairwise(),
+    func({ func: (msg) => ({
+      ...msg,
+      payload: {
+        prev: msg.payload[0],
+        curr: msg.payload[1],
+        delta: msg.payload[1] - msg.payload[0]
+      }
+    })}),
+    debug({ name: 'temp-delta', complete: true })
+  ],
 ]);
 
-example9.inject('input', { payload: { data: 'important' } });
+[20, 22, 21, 25, 23].forEach((temp, i) => {
+  setTimeout(() => tempMonitor.emit('temp', { payload: temp }), i * 10);
+});
 
-// ============================================================
-// Summary
-// ============================================================
+
+// ─────────────────────────────────────────────────────────────
+// Cleanup
+// ─────────────────────────────────────────────────────────────
 
 setTimeout(() => {
-  console.log('\n=== All Examples Complete ===\n');
-}, 200);
+  console.log('\n═══ All Examples Complete ═══\n');
+}, 500);

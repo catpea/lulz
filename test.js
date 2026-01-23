@@ -1,36 +1,107 @@
 /**
- * lulz Tests
+ * lulz - Test Suite
  */
 
-import { test } from 'node:test';
-import assert from 'node:assert';
 import {
   flow,
   subflow,
   compose,
+  parallel,
+  series,
   isOuter,
   isInner,
-  Inject,
-  Debug,
-  Function as FunctionNode,
-  Change,
-  Switch,
-  Template,
-  Delay,
-  Join,
-  Split,
+  isFlow,
+  inject,
+  debug,
+  func,
+  change,
+  switchNode,
+  template,
+  delay,
+  split,
+  join,
+  map,
+  filter,
+  scan,
+  debounce,
+  throttle,
+  take,
+  skip,
+  distinct,
+  pairwise,
+  tap,
+  buffer,
+  combineLatest,
 } from './index.js';
 
-// ============ TESTS ============
+
+// ─────────────────────────────────────────────────────────────
+// Test Utilities
+// ─────────────────────────────────────────────────────────────
+
+let testCount = 0;
+let passCount = 0;
+
+const test = (name, fn) => {
+  testCount++;
+  try {
+    fn();
+    passCount++;
+    console.log(`✓ ${name}`);
+  } catch (err) {
+    console.log(`✗ ${name}`);
+    console.log(`  Error: ${err.message}`);
+  }
+};
+
+const asyncTest = async (name, fn, timeout = 500) => {
+  testCount++;
+  try {
+    await Promise.race([
+      fn(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), timeout)
+      ),
+    ]);
+    passCount++;
+    console.log(`✓ ${name}`);
+  } catch (err) {
+    console.log(`✗ ${name}`);
+    console.log(`  Error: ${err.message}`);
+  }
+};
+
+const assert = (condition, message = 'Assertion failed') => {
+  if (!condition) throw new Error(message);
+};
+
+const assertEqual = (actual, expected, message = '') => {
+  if (actual !== expected) {
+    throw new Error(`${message} Expected ${expected}, got ${actual}`);
+  }
+};
+
+const assertDeepEqual = (actual, expected, message = '') => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${message} Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+};
+
+
+// ─────────────────────────────────────────────────────────────
+// Inner/Outer Detection Tests
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Inner/Outer Detection ═══\n');
 
 test('Regular function is outer', () => {
   function outer() { return () => {}; }
-  assert.ok(isOuter(outer), 'Should detect regular function as outer');
+  assert(isOuter(outer), 'Should detect regular function as outer');
 });
 
 test('Arrow function is inner', () => {
   const inner = () => {};
-  assert.ok(isInner(inner), 'Should detect arrow function as inner');
+  assert(isInner(inner), 'Should detect arrow function as inner');
 });
 
 test('Pre-called outer returns inner', () => {
@@ -38,393 +109,548 @@ test('Pre-called outer returns inner', () => {
     return (send, packet) => send(packet);
   }
   const inner = factory({});
-  assert.ok(isOuter(factory), 'Factory should be outer');
-  assert.ok(isInner(inner), 'Result should be inner');
+  assert(isOuter(factory), 'Factory should be outer');
+  assert(isInner(inner), 'Result should be inner');
 });
 
-test('Simple pipe connection', (t, done) => {
-  const results = [];
 
-  function producer(options) {
-    return (send) => {
-      send({ payload: 'test' });
-    };
-  }
+// ─────────────────────────────────────────────────────────────
+// Basic Flow Tests
+// ─────────────────────────────────────────────────────────────
 
-  function consumer(options) {
-    return (send, packet) => {
-      results.push(packet);
-      send(packet);
-    };
-  }
+console.log('\n═══ Basic Flow ═══\n');
 
-  const app = flow([
-    [producer, 'out'],
-    ['out', consumer],
-  ]);
-
-  app.start();
-
-  // Give it a tick
-  setTimeout(() => {
-    assert.strictEqual(results.length, 1, 'Should receive one packet');
-    assert.strictEqual(results[0].payload, 'test', 'Payload should match');
-    done();
-  }, 10);
+test('Flow is an EventEmitter', () => {
+  const app = flow([]);
+  assert(typeof app.on === 'function', 'Should have on method');
+  assert(typeof app.emit === 'function', 'Should have emit method');
+  assert(app._isFlow === true, 'Should be marked as flow');
 });
 
-test('Direct inject into pipe', () => {
+test('Direct inject into pipe via emit', () => {
   const results = [];
-
+  
   function collector(options) {
     return (send, packet) => {
       results.push(packet.payload);
       send(packet);
     };
   }
-
+  
   const app = flow([
     ['input', collector],
   ]);
-
-  app.inject('input', { payload: 'hello' });
-  app.inject('input', { payload: 'world' });
-
-  assert.strictEqual(results.length, 2, 'Should receive two packets');
-  assert.strictEqual(results[0], 'hello');
-  assert.strictEqual(results[1], 'world');
+  
+  app.emit('input', { payload: 'hello' });
+  app.emit('input', { payload: 'world' });
+  
+  assertEqual(results.length, 2, 'Should receive two packets');
+  assertEqual(results[0], 'hello');
+  assertEqual(results[1], 'world');
 });
 
-test('Fan-out sends to multiple transforms', () => {
-  const results = { a: [], b: [], c: [] };
-
-  function transformA(options) {
-    return (send, packet) => {
-      results.a.push(packet.payload);
-      send({ ...packet, from: 'A' });
-    };
-  }
-
-  function transformB(options) {
-    return (send, packet) => {
-      results.b.push(packet.payload);
-      send({ ...packet, from: 'B' });
-    };
-  }
-
-  function collector(options) {
-    return (send, packet) => {
-      results.c.push(packet.from);
-      send(packet);
-    };
-  }
-
+test('Listen to pipe via on', () => {
+  const results = [];
+  
   const app = flow([
-    ['input', transformA, transformB, 'output'],
-    ['output', collector],
+    ['input', 'output'],
   ]);
-
-  app.inject('input', { payload: 42 });
-
-  assert.strictEqual(results.a.length, 1, 'A should receive packet');
-  assert.strictEqual(results.b.length, 1, 'B should receive packet');
-  assert.strictEqual(results.c.length, 2, 'Collector should receive from both');
+  
+  app.on('output', (packet) => {
+    results.push(packet.payload);
+  });
+  
+  app.emit('input', { payload: 'test' });
+  
+  assertEqual(results.length, 1);
+  assertEqual(results[0], 'test');
 });
 
-test('Series processes in order: [a, b, c]', () => {
-  const order = [];
 
+// ─────────────────────────────────────────────────────────────
+// Series Processing (Default)
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Series Processing (Default) ═══\n');
+
+test('Default is series: a → b → c', () => {
+  const order = [];
+  
   function step(name) {
-    return function factory(options) {
+    return function(options) {
       return (send, packet) => {
         order.push(name);
         send({ ...packet, steps: [...(packet.steps || []), name] });
       };
     };
   }
-
+  
   const app = flow([
-    ['input', [step('A'), step('B'), step('C')], 'output'],
+    ['input', step('A'), step('B'), step('C'), 'output'],
   ]);
-
+  
   let finalPacket = null;
-  app.pipes['output'].connect({
-    receive: (packet) => { finalPacket = packet; }
-  });
-
-  app.inject('input', { payload: 'start' });
-
-  assert.deepStrictEqual(order, ['A', 'B', 'C'], 'Should process in order');
-  assert.deepStrictEqual(finalPacket.steps, ['A', 'B', 'C'], 'Packet should have all steps');
+  app.on('output', (packet) => { finalPacket = packet; });
+  
+  app.emit('input', { payload: 'start' });
+  
+  assertDeepEqual(order, ['A', 'B', 'C'], 'Should process in order');
+  assertDeepEqual(finalPacket.steps, ['A', 'B', 'C'], 'Packet should have all steps');
 });
 
-test('Series with pre-configured function', () => {
+test('Explicit series() helper', () => {
   const order = [];
+  
+  function step(name) {
+    return function(options) {
+      return (send, packet) => {
+        order.push(name);
+        send(packet);
+      };
+    };
+  }
+  
+  const app = flow([
+    ['input', series(step('X'), step('Y'), step('Z')), 'output'],
+  ]);
+  
+  app.emit('input', { payload: 'test' });
+  
+  assertDeepEqual(order, ['X', 'Y', 'Z']);
+});
 
+
+// ─────────────────────────────────────────────────────────────
+// Parallel Processing (Explicit)
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Parallel Processing (Explicit) ═══\n');
+
+test('Parallel with [] syntax', () => {
+  const results = { a: false, b: false, c: false };
+  
+  function setFlag(name) {
+    return function(options) {
+      return (send, packet) => {
+        results[name] = true;
+        send({ ...packet, from: name });
+      };
+    };
+  }
+  
+  const app = flow([
+    ['input', [setFlag('a'), setFlag('b'), setFlag('c')], 'output'],
+  ]);
+  
+  const outputs = [];
+  app.on('output', (packet) => outputs.push(packet.from));
+  
+  app.emit('input', { payload: 'parallel' });
+  
+  assert(results.a && results.b && results.c, 'All should receive packet');
+  assertEqual(outputs.length, 3, 'Output should receive 3 packets');
+});
+
+test('Explicit parallel() helper', () => {
+  const results = [];
+  
+  function addResult(value) {
+    return function(options) {
+      return (send, packet) => {
+        results.push(value);
+        send(packet);
+      };
+    };
+  }
+  
+  const app = flow([
+    ['input', parallel(addResult(1), addResult(2), addResult(3)), 'output'],
+  ]);
+  
+  app.emit('input', { payload: 'test' });
+  
+  assertEqual(results.length, 3, 'All parallel branches should execute');
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// Pre-configured Functions
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Pre-configured Functions ═══\n');
+
+test('Mixed pre-configured and auto-configured', () => {
+  const configs = [];
+  
   function configurable(options) {
     return (send, packet) => {
-      order.push(options.name);
+      configs.push(options.name || 'default');
       send(packet);
     };
   }
-
+  
   const app = flow([
-    ['input', [
-      configurable({ name: 'first' }),
-      configurable,  // outer, will get empty config
-      configurable({ name: 'third' }),
-    ], 'output'],
+    ['input', configurable({ name: 'first' }), configurable, configurable({ name: 'third' }), 'output'],
   ]);
-
-  app.inject('input', { payload: 'test' });
-
-  assert.strictEqual(order[0], 'first');
-  assert.strictEqual(order[2], 'third');
+  
+  app.emit('input', { payload: 'test' });
+  
+  assertEqual(configs[0], 'first');
+  assertEqual(configs[1], 'default');  // Auto-configured with {}
+  assertEqual(configs[2], 'third');
 });
 
-test('Subflow can be embedded', () => {
-  const results = [];
 
-  // Create a subflow that doubles the payload
+// ─────────────────────────────────────────────────────────────
+// Subflows and Auto-compose
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Subflows ═══\n');
+
+test('Subflow with in/out pipes', () => {
+  const results = [];
+  
   const doubler = subflow([
-    ['in', FunctionNode({ func: (msg) => ({ ...msg, payload: msg.payload * 2 }) }), 'out'],
+    ['in', func({ func: (msg) => ({ ...msg, payload: msg.payload * 2 }) }), 'out'],
   ]);
-
-  function collector(options) {
-    return (send, packet) => {
-      results.push(packet.payload);
-      send(packet);
-    };
-  }
-
-  // Main flow: inject into subflow, subflow outputs to collector
-  // We wire: input → subflow.in → (doubles) → subflow.out → collector
-  const app = flow([
-    ['output', collector],
-  ]);
-
-  // Connect: inject directly into subflow, subflow outputs to 'output' pipe
-  doubler._output.connect(app.pipes['output']);
-
-  // Inject into subflow's input
-  doubler._input.receive({ payload: 21 });
-
-  assert.strictEqual(results[0], 42, 'Subflow should double the value');
+  
+  doubler.on('out', (packet) => results.push(packet.payload));
+  doubler.emit('in', { payload: 21 });
+  
+  assertEqual(results[0], 42);
 });
 
-test('Inject node produces packets', (t, done) => {
+test('Compose multiple flows', () => {
+  const flow1 = subflow([
+    ['in', func({ func: (msg) => ({ ...msg, payload: msg.payload + 10 }) }), 'out'],
+  ]);
+  
+  const flow2 = subflow([
+    ['in', func({ func: (msg) => ({ ...msg, payload: msg.payload * 2 }) }), 'out'],
+  ]);
+  
+  const composed = compose(flow1, flow2);
+  
   const results = [];
-
-  function collector(options) {
-    return (send, packet) => {
-      results.push(packet);
-      send(packet);
-    };
-  }
-
-  const app = flow([
-    [Inject({ payload: 'hello', once: true }), collector],
-  ]);
-
-  app.start();
-
-  setTimeout(() => {
-    assert.ok(results.length >= 1, 'Should produce at least one packet');
-    assert.strictEqual(results[0].payload, 'hello');
-    done();
-  }, 50);
+  composed.on('out', (packet) => results.push(packet.payload));
+  
+  composed.emit('in', { payload: 5 });
+  
+  // (5 + 10) * 2 = 30
+  assertEqual(results[0], 30);
 });
 
-test('Debug node logs and passes through', () => {
+
+// ─────────────────────────────────────────────────────────────
+// Node-RED Core Nodes
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Node-RED Core Nodes ═══\n');
+
+test('debug node logs and passes through', () => {
   const logs = [];
   const results = [];
-
-  const customLogger = (...args) => logs.push(args);
-
-  function collector(options) {
-    return (send, packet) => {
-      results.push(packet);
-      send(packet);
-    };
-  }
-
+  
   const app = flow([
-    ['input', Debug({ name: 'test', logger: customLogger }), collector],
+    ['input', debug({ name: 'test', logger: (...args) => logs.push(args) }), 'output'],
   ]);
-
-  app.inject('input', { payload: 42 });
-
-  assert.strictEqual(logs.length, 1, 'Should log once');
-  assert.strictEqual(logs[0][0], '[test]', 'Should have correct label');
-  assert.strictEqual(logs[0][1], 42, 'Should log payload');
-  assert.strictEqual(results.length, 1, 'Should pass through');
+  
+  app.on('output', (packet) => results.push(packet));
+  app.emit('input', { payload: 42 });
+  
+  assertEqual(logs.length, 1);
+  assertEqual(logs[0][0], '[test]');
+  assertEqual(logs[0][1], 42);
+  assertEqual(results.length, 1);
 });
 
-test('Function node transforms messages', () => {
+test('func node transforms messages', () => {
   const results = [];
-
-  function collector(options) {
-    return (send, packet) => {
-      results.push(packet);
-      send(packet);
-    };
-  }
-
+  
   const app = flow([
-    ['input', FunctionNode({
-      func: (msg) => ({
-        ...msg,
-        payload: msg.payload.toUpperCase()
-      })
-    }), collector],
+    ['input', func({ func: (msg) => ({ ...msg, payload: msg.payload.toUpperCase() }) }), 'output'],
   ]);
-
-  app.inject('input', { payload: 'hello' });
-
-  assert.strictEqual(results[0].payload, 'HELLO');
+  
+  app.on('output', (packet) => results.push(packet));
+  app.emit('input', { payload: 'hello' });
+  
+  assertEqual(results[0].payload, 'HELLO');
 });
 
-test('Change node sets properties', () => {
+test('change node sets properties', () => {
   const results = [];
-
-  function collector(options) {
-    return (send, packet) => {
-      results.push(packet);
-      send(packet);
-    };
-  }
-
+  
   const app = flow([
-    ['input', Change({
+    ['input', change({
       rules: [
         { type: 'set', prop: 'payload', to: 'changed' },
         { type: 'set', prop: 'topic', to: 'test' },
       ]
-    }), collector],
+    }), 'output'],
   ]);
-
-  app.inject('input', { payload: 'original' });
-
-  assert.strictEqual(results[0].payload, 'changed');
-  assert.strictEqual(results[0].topic, 'test');
+  
+  app.on('output', (packet) => results.push(packet));
+  app.emit('input', { payload: 'original' });
+  
+  assertEqual(results[0].payload, 'changed');
+  assertEqual(results[0].topic, 'test');
 });
 
-test('Switch node routes messages', () => {
-  const results = { high: [], low: [] };
-
-  function highCollector(options) {
-    return (send, packet) => {
-      results.high.push(packet.payload);
-      send(packet);
-    };
-  }
-
-  function lowCollector(options) {
-    return (send, packet) => {
-      results.low.push(packet.payload);
-      send(packet);
-    };
-  }
-
+test('switchNode routes messages', () => {
+  const high = [];
+  
   const app = flow([
-    ['input', Switch({
+    ['input', switchNode({
       property: 'payload',
-      rules: [
-        { type: 'gte', value: 50 },
-      ]
+      rules: [{ type: 'gte', value: 50 }]
     }), 'high'],
-    ['high', highCollector],
   ]);
-
-  app.inject('input', { payload: 75 });
-  app.inject('input', { payload: 25 });
-
-  assert.strictEqual(results.high.length, 1, 'Only high value should route');
-  assert.strictEqual(results.high[0], 75);
+  
+  app.on('high', (packet) => high.push(packet.payload));
+  
+  app.emit('input', { payload: 75 });
+  app.emit('input', { payload: 25 });
+  
+  assertEqual(high.length, 1);
+  assertEqual(high[0], 75);
 });
 
-test('Template node renders mustache', () => {
+test('template node renders mustache', () => {
   const results = [];
+  
+  const app = flow([
+    ['input', template({ template: 'Hello {{name}}!' }), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet));
+  app.emit('input', { payload: '', name: 'Alice' });
+  
+  assertEqual(results[0].payload, 'Hello Alice!');
+});
 
-  function collector(options) {
-    return (send, packet) => {
-      results.push(packet);
-      send(packet);
+test('split node splits arrays', () => {
+  const results = [];
+  
+  const app = flow([
+    ['input', split(), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet.payload));
+  app.emit('input', { payload: [1, 2, 3] });
+  
+  assertEqual(results.length, 3);
+  assertDeepEqual(results, [1, 2, 3]);
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// RxJS-Style Operators
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ RxJS-Style Operators ═══\n');
+
+test('map transforms values', () => {
+  const results = [];
+  
+  const app = flow([
+    ['input', map({ fn: (x) => x * 2 }), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet.payload));
+  app.emit('input', { payload: 21 });
+  
+  assertEqual(results[0], 42);
+});
+
+test('scan accumulates values', () => {
+  const results = [];
+  
+  const app = flow([
+    ['input', scan({ reducer: (acc, x) => acc + x, initial: 0 }), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet.payload));
+  
+  app.emit('input', { payload: 1 });
+  app.emit('input', { payload: 2 });
+  app.emit('input', { payload: 3 });
+  
+  assertDeepEqual(results, [1, 3, 6]);
+});
+
+test('take only first N', () => {
+  const results = [];
+  
+  const app = flow([
+    ['input', take({ count: 2 }), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet.payload));
+  
+  app.emit('input', { payload: 1 });
+  app.emit('input', { payload: 2 });
+  app.emit('input', { payload: 3 });
+  
+  assertEqual(results.length, 2);
+  assertDeepEqual(results, [1, 2]);
+});
+
+test('skip first N', () => {
+  const results = [];
+  
+  const app = flow([
+    ['input', skip({ count: 2 }), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet.payload));
+  
+  app.emit('input', { payload: 1 });
+  app.emit('input', { payload: 2 });
+  app.emit('input', { payload: 3 });
+  
+  assertEqual(results.length, 1);
+  assertEqual(results[0], 3);
+});
+
+test('distinct filters duplicates', () => {
+  const results = [];
+  
+  const app = flow([
+    ['input', distinct(), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet.payload));
+  
+  app.emit('input', { payload: 1 });
+  app.emit('input', { payload: 2 });
+  app.emit('input', { payload: 1 });
+  app.emit('input', { payload: 3 });
+  
+  assertDeepEqual(results, [1, 2, 3]);
+});
+
+test('pairwise emits pairs', () => {
+  const results = [];
+  
+  const app = flow([
+    ['input', pairwise(), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet.payload));
+  
+  app.emit('input', { payload: 'a' });
+  app.emit('input', { payload: 'b' });
+  app.emit('input', { payload: 'c' });
+  
+  assertEqual(results.length, 2);
+  assertDeepEqual(results[0], ['a', 'b']);
+  assertDeepEqual(results[1], ['b', 'c']);
+});
+
+test('tap performs side effect', () => {
+  const sideEffects = [];
+  const results = [];
+  
+  const app = flow([
+    ['input', tap({ fn: (p) => sideEffects.push(p.payload) }), 'output'],
+  ]);
+  
+  app.on('output', (packet) => results.push(packet.payload));
+  app.emit('input', { payload: 'test' });
+  
+  assertEqual(sideEffects[0], 'test');
+  assertEqual(results[0], 'test');
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// Node-RED Tutorial 1: Inject → Debug
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Node-RED Tutorial 1 ═══\n');
+
+await asyncTest('Tutorial 1: Inject timestamp to Debug', async () => {
+  const logs = [];
+  
+  const app = flow([
+    [inject({ payload: () => Date.now(), once: true }), debug({ name: 'output', logger: (...args) => logs.push(args) })],
+  ]);
+  
+  app.start();
+  
+  await new Promise(r => setTimeout(r, 50));
+  
+  assert(logs.length >= 1, 'Should have logged');
+  assert(typeof logs[0][1] === 'number', 'Should be timestamp');
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// Node-RED Tutorial 2: Inject → Function → Debug
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Node-RED Tutorial 2 ═══\n');
+
+await asyncTest('Tutorial 2: Modify payload with Function node', async () => {
+  const logs = [];
+  
+  const app = flow([
+    [inject({ payload: 'Hello World!', once: true }), 'msg'],
+    ['msg', func({ func: (msg) => ({ ...msg, payload: msg.payload.toLowerCase() }) }), debug({ name: 'output', logger: (...args) => logs.push(args) })],
+  ]);
+  
+  app.start();
+  
+  await new Promise(r => setTimeout(r, 50));
+  
+  assert(logs.length >= 1, 'Should have logged');
+  assertEqual(logs[0][1], 'hello world!');
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// Complex Pipeline
+// ─────────────────────────────────────────────────────────────
+
+console.log('\n═══ Complex Pipeline ═══\n');
+
+test('Series with parallel block', () => {
+  const order = [];
+  
+  function step(name) {
+    return function(options) {
+      return (send, packet) => {
+        order.push(name);
+        send(packet);
+      };
     };
   }
-
+  
+  // This should: A → (B,C parallel) → D
   const app = flow([
-    ['input', Template({
-      template: 'Hello {{name}}, you have {{count}} messages!'
-    }), collector],
+    ['input', step('A'), 'stage1'],
+    ['stage1', [step('B'), step('C')], 'stage2'],
+    ['stage2', step('D'), 'output'],
   ]);
-
-  app.inject('input', { payload: '', name: 'Alice', count: 5 });
-
-  assert.strictEqual(results[0].payload, 'Hello Alice, you have 5 messages!');
+  
+  app.emit('input', { payload: 'test' });
+  
+  assertEqual(order[0], 'A', 'A should be first');
+  assert(order.includes('B') && order.includes('C'), 'B and C should run');
+  // D runs twice (once for each parallel output)
 });
 
-test('Split node splits arrays', () => {
-  const results = [];
 
-  function collector(options) {
-    return (send, packet) => {
-      results.push(packet.payload);
-      send(packet);
-    };
+// ─────────────────────────────────────────────────────────────
+// Results
+// ─────────────────────────────────────────────────────────────
+
+setTimeout(() => {
+  console.log(`\n═══ Results: ${passCount}/${testCount} tests passed ═══\n`);
+  if (passCount === testCount) {
+    console.log('All tests passed! ✓\n');
+  } else {
+    console.log(`${testCount - passCount} test(s) failed.\n`);
+    process.exit(1);
   }
-
-  const app = flow([
-    ['input', Split(), collector],
-  ]);
-
-  app.inject('input', { payload: [1, 2, 3] });
-
-  assert.strictEqual(results.length, 3);
-  assert.deepStrictEqual(results, [1, 2, 3]);
-});
-
-test('Tutorial 1: Inject timestamp to Debug', (t, done) => {
-  const logs = [];
-  const customLogger = (...args) => logs.push(args);
-
-  // Recreate first tutorial flow
-  const app = flow([
-    [Inject({ payload: () => Date.now(), once: true }), Debug({ name: 'debug', logger: customLogger })],
-  ]);
-
-  app.start();
-
-  setTimeout(() => {
-    assert.ok(logs.length >= 1, 'Should have logged');
-    assert.strictEqual(typeof logs[0][1], 'number', 'Should be timestamp');
-    done();
-  }, 50);
-});
-
-test('Tutorial 2: Modify payload with Function node', (t, done) => {
-  const logs = [];
-  const customLogger = (...args) => logs.push(args);
-
-  // Second tutorial: inject → function (modify payload) → debug
-  const app = flow([
-    [Inject({
-      payload: 'Hello World!',
-      once: true
-    }), 'msg'],
-    ['msg', FunctionNode({
-      func: (msg) => ({
-        ...msg,
-        payload: msg.payload.toLowerCase()
-      })
-    }), Debug({ name: 'output', logger: customLogger })],
-  ]);
-
-  app.start();
-
-  setTimeout(() => {
-    assert.ok(logs.length >= 1, 'Should have logged');
-    assert.strictEqual(logs[0][1], 'hello world!', 'Should be lowercase');
-    done();
-  }, 50);
-});
+}, 300);

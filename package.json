@@ -1,33 +1,32 @@
 {
   "name": "lulz",
-  "version": "1.0.3",
-  "description": "A reactive dataflow system inspired by Visual Programming, FFmpeg filtergraph and Node-RED",
+  "version": "2.0.0",
+  "description": "A reactive dataflow system that makes coders happy",
   "type": "module",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./red": "./src/red-lib.js",
+    "./rx": "./src/rx-lib.js",
+    "./workers": "./src/workers.js"
+  },
   "scripts": {
-    "test": "node --test",
-    "save": "git add .; git commit -m 'Updated Release'; npm version patch; npm publish; git push --follow-tags;",
-    "examples": "node examples.js"
+    "test": "node test.js",
+    "examples": "node examples.js",
+    "save": "git add .; git commit -m 'Updated Release'; npm version patch; npm publish; git push --follow-tags;"
   },
   "keywords": [
     "dataflow",
     "reactive",
     "flow",
     "pipeline",
-    "node-red"
+    "node-red",
+    "rxjs"
   ],
-  "author": "catpea (https://github.com/catpea)",
-  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/catpea/lulz.git"
+    "url": "https://github.com/catpea/lulz"
   },
-  "bugs": {
-    "url": "https://github.com/catpea/lulz/issues"
-  },
-  "homepage": "https://catpea.github.io/lulz",
-  "funding": {
-    "type": "github",
-    "url": "https://github.com/sponsors/catpea"
-  }
+  "author": "catpea",
+  "license": "MIT"
 }

@@ -1,6 +1,28 @@
 # lulz
 
-A reactive dataflow system inspired by FFmpeg filtergraph notation and Node-RED.
+A reactive dataflow system that makes coders happy. 🎉
+
+Inspired by FFmpeg filtergraph notation, Node-RED, and RxJS.
+
+```javascript
+import { flow, inject, debug } from 'lulz';
+
+const app = flow([
+  [inject({ payload: 'Hello!' }), debug({ name: 'out' })],
+]);
+
+app.start();
+```
+
+## Features
+
+- **EventEmitter API** - Natural `emit`/`on` for packet injection and interception
+- **Series by Default** - `['in', a, b, c, 'out']` processes sequentially
+- **Explicit Parallel** - `['in', [a, b, c], 'out']` fans out to all
+- **Auto-compose** - Embed flows within flows seamlessly
+- **Worker Pool** - CPU-bound tasks with Worker Threads/Web Workers
+- **RxJS Operators** - `map`, `filter`, `scan`, `combineLatest`, and more
+- **Node-RED Style** - `inject`, `debug`, `func`, `switch`, `template`
 
 ## Installation
 
@@ -11,275 +33,355 @@ npm install lulz
 ## Quick Start
 
 ```javascript
-import { flow, Inject, Debug } from 'lulz';
+import { flow, inject, debug, func } from 'lulz';
 
+// Create a flow
 const app = flow([
-  [Inject({ payload: 'Hello World!' }), Debug({ name: 'output' })],
+  [inject({ payload: 'Hello World!' }), 'input'],
+  ['input', func({ func: msg => ({ ...msg, payload: msg.payload.toUpperCase() }) }), 'output'],
+  ['output', debug({ name: 'result' })],
 ]);
 
+// Start producers
 app.start();
-```
 
-## Core Concepts
+// Or inject manually via EventEmitter API
+app.emit('input', { payload: 'Manual injection!' });
 
-### Flow Syntax
-
-Each line in a flow is an array: `[source, ...transforms, destination]`
-
-- **Source**: A string (pipe name) or producer function
-- **Transforms**: Functions that process packets
-- **Destination**: A string (pipe name) or consumer function
-
-```javascript
-const app = flow([
-  [producer, 'pipeName'],          // Producer → pipe
-  ['pipeName', transform, 'out'],  // Pipe → transform → pipe
-  ['out', consumer],               // Pipe → consumer
-]);
-```
-
-### Function Types
-
-**Outer functions** (factories) are regular functions that return inner functions:
-
-```javascript
-function myTransform(options) {           // Outer - receives config
-  return (send, packet) => {              // Inner - processes packets
-    send({ ...packet, modified: true });
-  };
-}
-```
-
-**Inner functions** are arrow functions that do the actual processing:
-
-```javascript
-const passthrough = (send, packet) => send(packet);
-```
-
-The system auto-detects which is which using `fn.hasOwnProperty('prototype')`:
-- Regular functions have `prototype` → outer
-- Arrow functions don't → inner
-
-### Pre-configured vs Auto-configured
-
-```javascript
-['input', myTransform, 'output']              // Auto-config: called with {}
-['input', myTransform({ option: 1 }), 'output'] // Pre-configured
+// Listen to any pipe
+app.on('output', (packet) => {
+  console.log('Received:', packet.payload);
+});
 ```
 
 ## Processing Modes
 
-### Fan-out (Parallel)
+### Series (Default)
 
-All transforms receive the same packet simultaneously:
+Functions process sequentially. Output of one becomes input of next.
 
 ```javascript
-['input', transformA, transformB, transformC, 'output']
-//         ↓           ↓           ↓
-//      packet      packet      packet
-//         ↓           ↓           ↓
-//         └───────────┴───────────┘
-//                     ↓
-//                  output (receives 3 packets)
+['input', validate, transform, save, 'output']
+//          ↓          ↓         ↓
+//       packet → packet → packet → output
 ```
 
-### Series (Sequential)
+### Parallel (Explicit)
 
-Use `[a, b, c]` syntax for sequential processing:
+Use `[]` or `parallel()` to fan out. All receive the same packet.
 
 ```javascript
-['input', [transformA, transformB, transformC], 'output']
-//                ↓
-//            packet
-//                ↓
-//           transformA
-//                ↓
-//           transformB
-//                ↓
-//           transformC
-//                ↓
-//             output (receives 1 packet)
+['input', [processA, processB, processC], 'output']
+//              ↓         ↓         ↓
+//           packet    packet    packet
+//              ↓         ↓         ↓
+//              └─────────┴─────────┘
+//                        ↓
+//                 output (3 packets)
 ```
 
-### Mixed
-
-Combine both in a single line:
+### Helper Functions
 
 ```javascript
-['input', validate, [enrich, format], notify, 'output']
-//           ↓              ↓            ↓
-//        fan-out        series       fan-out
+import { series, parallel } from 'lulz';
+
+// Explicit series (same as default, but clearer)
+['input', series(a, b, c), 'output']
+
+// Explicit parallel
+['input', parallel(a, b, c), 'output']
 ```
 
-## Built-in Nodes
+## EventEmitter API
 
-### Inject
-
-Produces packets on schedule or trigger:
+Every flow is an EventEmitter. Pipes are events.
 
 ```javascript
-Inject({
-  payload: 'hello',        // or () => Date.now() for dynamic
+const app = flow([
+  ['data', transform, 'result'],
+]);
+
+// Inject packets
+app.emit('data', { payload: 42 });
+
+// Listen to pipes
+app.on('result', (packet) => {
+  console.log(packet.payload);
+});
+
+// Also works
+app.inject('data', { payload: 42 });
+```
+
+## Function Types
+
+### Outer Functions (Factories)
+
+Regular functions that return inner functions. Called with options.
+
+```javascript
+function myTransform(options) {
+  const { multiplier = 1 } = options;
+  return (send, packet) => {
+    send({ ...packet, payload: packet.payload * multiplier });
+  };
+}
+
+// Usage
+['input', myTransform({ multiplier: 2 }), 'output']  // Pre-configured
+['input', myTransform, 'output']                      // Auto-configured with {}
+```
+
+### Inner Functions (Processors)
+
+Arrow functions that process packets. Used directly.
+
+```javascript
+const double = (send, packet) => {
+  send({ ...packet, payload: packet.payload * 2 });
+};
+
+['input', double, 'output']
+```
+
+## Subflows
+
+Create reusable flow components.
+
+```javascript
+import { subflow, compose } from 'lulz';
+
+// Create reusable component
+const sanitizer = subflow([
+  ['in', func({ func: msg => ({
+    ...msg,
+    payload: String(msg.payload).trim().toLowerCase()
+  })}), 'out'],
+]);
+
+// Use via compose
+const pipeline = compose(sanitizer, validator, enricher);
+pipeline.emit('in', { payload: '  HELLO  ' });
+
+// Or embed in flow (auto-compose)
+const app = flow([
+  ['input', sanitizer, 'output'],
+]);
+```
+
+## Node-RED Style Nodes
+
+### inject
+
+Produce packets on schedule.
+
+```javascript
+inject({
+  payload: 'hello',           // or () => Date.now()
   topic: 'greeting',
-  once: true,              // Emit once on start
-  onceDelay: 100,          // Delay before first emit (ms)
-  interval: 1000,          // Repeat interval (ms)
+  once: true,                  // Emit once on start
+  onceDelay: 100,             // Delay before first
+  interval: 1000,             // Repeat interval (ms)
 })
 ```
 
-### Debug
+### debug
 
-Logs packets:
+Log packets.
 
 ```javascript
-Debug({
+debug({
   name: 'my-debug',
   active: true,
-  complete: false,         // true = show full msg, false = payload only
-  logger: console.log,     // Custom logger function
+  complete: false,            // true = full packet
+  logger: console.log,
 })
 ```
 
-### Function
+### func
 
-Execute custom JavaScript:
+Execute custom code.
 
 ```javascript
-Function({
+func({
   func: (msg, context) => {
     return { ...msg, payload: msg.payload.toUpperCase() };
   },
 })
 ```
 
-Return `null` to drop the message.
+### change
 
-### Change
-
-Modify message properties:
+Modify properties.
 
 ```javascript
-Change({
+change({
   rules: [
     { type: 'set', prop: 'payload', to: 'new value' },
-    { type: 'set', prop: 'topic', to: (msg) => msg.payload.type },
     { type: 'change', prop: 'payload', from: /old/, to: 'new' },
-    { type: 'delete', prop: 'unwanted' },
-    { type: 'move', prop: 'payload', to: 'data' },
+    { type: 'delete', prop: 'temp' },
+    { type: 'move', prop: 'data', to: 'payload' },
   ]
 })
 ```
 
-### Switch
+### switchNode
 
-Route messages based on conditions:
+Route by conditions.
 
 ```javascript
-Switch({
+switchNode({
   property: 'payload',
   rules: [
-    { type: 'eq', value: 'hello' },
     { type: 'gt', value: 100 },
     { type: 'regex', value: /^test/ },
     { type: 'else' },
   ],
-  checkall: false,  // Stop at first match
 })
 ```
 
-Rule types: `eq`, `neq`, `lt`, `gt`, `lte`, `gte`, `regex`, `true`, `false`, `null`, `nnull`, `else`
+### template
 
-### Template
-
-Render mustache templates:
+Render templates.
 
 ```javascript
-Template({
-  template: 'Hello {{name}}, you have {{count}} messages!',
-  field: 'payload',  // Output field
+template({
+  template: 'Hello {{name}}!',
+  field: 'payload',
 })
 ```
 
-### Delay
+## RxJS-Style Operators
 
-Delay or rate-limit messages:
+### Transformation
 
 ```javascript
-Delay({
-  delay: 1000,    // Delay in ms
-  rate: 10,       // Or rate limit (msgs/sec)
-  drop: false,    // Drop vs queue when rate limited
-})
+import { map, scan, pluck, pairwise, buffer } from 'lulz';
+
+map({ fn: x => x * 2 })
+scan({ reducer: (acc, x) => acc + x, initial: 0 })
+pluck({ path: 'data.value' })
+pairwise()
+buffer({ count: 5 })
 ```
 
-### Split
-
-Split arrays/strings into sequences:
+### Filtering
 
 ```javascript
-Split({
-  property: 'payload',
-  delimiter: ',',  // For strings, or 'array' for arrays
-})
+import { filter, take, skip, distinct, distinctUntilChanged } from 'lulz';
+
+filter({ predicate: x => x > 0 })
+take({ count: 5 })
+skip({ count: 2 })
+distinct()
+distinctUntilChanged()
 ```
 
-### Join
-
-Join sequences back together:
+### Timing
 
 ```javascript
-Join({
-  count: 5,           // Emit after N messages
-  property: 'payload',
-  mode: 'manual',     // 'auto', 'manual', 'reduce'
-})
+import { debounce, throttle, delay, timeout } from 'lulz';
+
+debounce({ time: 300 })
+throttle({ time: 1000 })
+delay({ time: 500 })
+timeout({ time: 5000 })
 ```
 
-## Subflows
-
-Create reusable flow components:
+### Combination
 
 ```javascript
-const sanitizer = subflow([
-  ['in', Function({ func: (msg) => ({
-    ...msg,
-    payload: String(msg.payload).trim().toLowerCase()
-  })}), 'out'],
+import { combineLatest, merge, zip, withLatestFrom } from 'lulz';
+
+combineLatest({ pipes: ['temp', 'humidity'] })
+merge()
+zip({ sources: 2 })
+```
+
+## Worker Pool
+
+Process CPU-bound tasks in parallel using Worker Threads.
+
+```javascript
+import { taskQueue, worker, parallelMap } from 'lulz';
+
+// Standalone task queue
+const queue = taskQueue({
+  workers: 4,
+  handler: (data) => heavyComputation(data),
+});
+
+queue.on('result', ({ id, result }) => console.log(result));
+queue.submit({ data: 42 });
+await queue.drain();
+
+// In a flow
+const app = flow([
+  ['input', worker({
+    workers: 4,
+    handler: (data) => data * data,
+  }), 'output'],
 ]);
-
-// Wire into main flow
-mainFlow.pipes['input'].connect(sanitizer._input);
-sanitizer._output.connect(mainFlow.pipes['process']);
 ```
 
-## API
+## API Reference
 
-### `flow(graph, context)`
+### flow(graph, context?)
 
-Create a new flow from a graph definition.
+Create a new flow.
 
-Returns:
-- `start()` - Start all producers
-- `stop()` - Stop all producers
-- `inject(pipeName, packet)` - Inject a packet into a pipe
-- `getPipe(name)` - Get a pipe by name
-- `pipes` - Object of all pipes
+```javascript
+const app = flow([...], { username: 'alice' });
 
-### `subflow(graph, context)`
+app.start();     // Start producers
+app.stop();      // Stop producers
+app.emit(pipe, packet);   // Inject packet
+app.on(pipe, handler);    // Listen to pipe
+app.pipe(name);           // Get pipe node
+```
 
-Create a subflow with `in` and `out` pipes.
+### subflow(graph, context?)
 
-### `compose(...flows)`
+Create a reusable flow with `in`/`out` pipes.
 
-Connect multiple flows in sequence.
+### compose(...flows)
+
+Connect flows in sequence.
+
+### series(...fns) / parallel(...fns)
+
+Explicit processing mode markers.
+
+## Project Structure
+
+```
+lulz/
+├── index.js           # Main exports
+├── src/
+│   ├── flow.js        # Core engine
+│   ├── red-lib.js     # Node-RED style nodes
+│   ├── rx-lib.js      # RxJS operators
+│   ├── workers.js     # Worker pool
+│   └── utils.js       # Utilities
+├── test.js
+├── examples.js
+├── TODO.md            # Future operators
+└── README.md
+```
 
 ## Running
 
 ```bash
-npm test      # Run tests
-npm run examples  # Run examples
+npm test        # Run tests
+npm run examples    # Run examples
 ```
 
 ## License
 
 MIT
+
+## Links
+
+- [GitHub](https://github.com/catpea/lulz)
+- [Node-RED](https://nodered.org/)
+- [RxJS](https://rxjs.dev/)
