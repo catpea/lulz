@@ -23,10 +23,19 @@
     "node-red",
     "rxjs"
   ],
+
+  "author": "catpea (https://github.com/catpea)",
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/catpea/lulz"
+    "url": "git+https://github.com/catpea/lulz.git"
   },
-  "author": "catpea",
-  "license": "MIT"
+  "bugs": {
+    "url": "https://github.com/catpea/lulz/issues"
+  },
+  "homepage": "https://catpea.github.io/lulz",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/catpea"
+  }
 }
