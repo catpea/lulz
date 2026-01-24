@@ -352,6 +352,355 @@ Connect flows in sequence.
 
 Explicit processing mode markers.
 
+## Workers
+
+lulz includes a worker pool system for CPU-intensive tasks. It uses **Worker Threads** in Node.js (and Web Workers in browsers) so heavy computation doesn't block your main thread.
+
+### Why Workers?
+
+JavaScript is single-threaded. If you compute Fibonacci(45), your entire app freezes:
+
+```javascript
+// ❌ Bad: Blocks everything
+['input', (send, packet) => {
+  const result = fibonacci(packet.payload);  // 🧊 Frozen for 5 seconds
+  send({ ...packet, payload: result });
+}, 'output']
+```
+
+Workers run in separate threads:
+
+```javascript
+// ✅ Good: Non-blocking
+['input', worker({ handler: fibonacci }), 'output']
+// Main thread stays responsive while workers compute
+```
+
+---
+
+### taskQueue — Standalone Task Queue
+
+The foundation. An EventEmitter that manages a pool of workers.
+
+```javascript
+import { taskQueue } from 'lulz';
+
+// Create a queue with 4 workers
+const queue = taskQueue({
+  workers: 4,                      // Number of worker threads (default: CPU cores)
+  handler: (data) => data * data   // Function that runs in worker
+});
+
+// Listen for completed tasks
+queue.on('result', ({ id, result }) => {
+  console.log(`Task ${id} finished:`, result);
+});
+
+// Listen for errors (handler threw an exception)
+queue.on('error', ({ id, error }) => {
+  console.error(`Task ${id} failed:`, error);
+});
+
+// Listen for all tasks complete
+queue.on('drain', () => {
+  console.log('All tasks done!');
+});
+
+// Submit a single task
+queue.submit({ id: 'task-1', data: 42 });
+// → Task task-1 finished: 1764
+
+// Submit multiple tasks
+queue.submitAll([
+  { id: 'a', data: 10 },
+  { id: 'b', data: 20 },
+  { id: 'c', data: 30 },
+]);
+```
+
+#### Async Handlers
+
+Handlers can be async:
+
+```javascript
+const queue = taskQueue({
+  workers: 2,
+  handler: async (url) => {
+    const response = await fetch(url);
+    return response.json();
+  }
+});
+
+queue.submit({ data: 'https://api.example.com/data' });
+```
+
+#### Queue Control
+
+```javascript
+// Check queue status
+console.log(queue.stats());
+// → { pending: 5, running: 4, available: 0, totalSubmitted: 9, totalCompleted: 4 }
+
+// Wait for all tasks to complete
+await queue.drain();
+
+// Shut down all workers
+await queue.terminate();
+```
+
+---
+
+### worker — Flow Integration
+
+Use workers directly in your flows. Packets go in, get processed in worker threads, come out.
+
+```javascript
+import { flow, worker } from 'lulz';
+
+const app = flow([
+  ['numbers',
+    // This runs in a worker thread, not the main thread
+    worker({
+      workers: 4,
+      handler: (n) => {
+        // Heavy computation here
+        let sum = 0;
+        for (let i = 0; i < n * 1000000; i++) {
+          sum += Math.sqrt(i);
+        }
+        return sum;
+      }
+    }),
+    'results'
+  ],
+
+  ['results', debug({ name: 'computed' })],
+]);
+
+// Send numbers to process
+app.emit('numbers', { payload: 100 });
+app.emit('numbers', { payload: 200 });
+app.emit('numbers', { payload: 300 });
+// Results arrive as workers complete (may be out of order)
+```
+
+#### Preserves Packet Metadata
+
+The worker node keeps your packet's other properties intact:
+
+```javascript
+app.emit('numbers', {
+  payload: 100,
+  userId: 'alice',      // ← preserved
+  requestId: 'req-123'  // ← preserved
+});
+
+// Output packet:
+// { payload: 12345.67, userId: 'alice', requestId: 'req-123' }
+```
+
+---
+
+### parallelMap — Process Arrays
+
+When you have an array and want each item processed in parallel:
+
+```javascript
+import { flow, parallelMap } from 'lulz';
+
+const app = flow([
+  ['images',
+    parallelMap({
+      workers: 4,
+      fn: (image) => {
+        // Each image processed in its own worker
+        return {
+          ...image,
+          thumbnail: generateThumbnail(image),
+          compressed: compress(image)
+        };
+      }
+    }),
+    'processed'
+  ],
+]);
+
+// Send an array
+app.emit('images', {
+  payload: [image1, image2, image3, image4, image5]
+});
+
+// Receive complete array (order preserved!)
+// { payload: [processed1, processed2, processed3, processed4, processed5] }
+```
+
+Key difference from `worker`:
+- `worker`: Each packet = one task, results stream out
+- `parallelMap`: One packet with array = many tasks, waits for all, emits single array
+
+---
+
+### cpuTask — Quick Wrapper
+
+Shorthand when you just want to run a function in a worker:
+
+```javascript
+import { flow, cpuTask } from 'lulz';
+
+// Instead of this:
+worker({ handler: (n) => fibonacci(n) })
+
+// Write this:
+cpuTask((n) => fibonacci(n))
+```
+
+Example:
+
+```javascript
+const app = flow([
+  ['input', cpuTask(expensiveCalculation), 'output'],
+]);
+```
+
+It's just sugar for `worker({ handler: fn })` with default worker count.
+
+---
+
+### Patterns
+
+#### Pattern 1: Fan-Out Computation
+
+Process the same data multiple ways in parallel:
+
+```javascript
+const app = flow([
+  ['data', [
+    worker({ handler: analyzeWithMethodA }),
+    worker({ handler: analyzeWithMethodB }),
+    worker({ handler: analyzeWithMethodC }),
+  ], 'analyzed'],
+]);
+// All three analyses run simultaneously in different workers
+```
+
+#### Pattern 2: Pipeline with Mixed Threading
+
+Some steps in main thread, heavy steps in workers:
+
+```javascript
+const app = flow([
+  ['request',
+    validate,           // Fast: main thread
+    parseInput,         // Fast: main thread
+    worker({ handler: heavyTransform }),  // Slow: worker
+    formatOutput,       // Fast: main thread
+    'response'
+  ],
+]);
+```
+
+#### Pattern 3: Batch Processing
+
+Split → process in workers → join:
+
+```javascript
+const app = flow([
+  // Split array into individual items
+  ['batch', split(), 'item'],
+
+  // Process each in workers
+  ['item', worker({ handler: processOne }), 'processed'],
+
+  // Collect results (need custom collector)
+  ['processed', join({ count: expectedCount }), 'complete'],
+]);
+```
+
+Or just use `parallelMap` which does this for you:
+
+```javascript
+const app = flow([
+  ['batch', parallelMap({ fn: processOne }), 'complete'],
+]);
+```
+
+---
+
+### Error Handling
+
+Worker errors don't crash your app. They emit on the `'error'` event:
+
+```javascript
+const queue = taskQueue({
+  handler: (data) => {
+    if (data < 0) throw new Error('Negative not allowed');
+    return Math.sqrt(data);
+  }
+});
+
+queue.on('result', ({ id, result }) => {
+  console.log(`${id} = ${result}`);
+});
+
+queue.on('error', ({ id, error }) => {
+  console.log(`${id} failed: ${error}`);
+});
+
+queue.submit({ id: 'good', data: 16 });   // → good = 4
+queue.submit({ id: 'bad', data: -1 });    // → bad failed: Negative not allowed
+```
+
+In flows, errors become packet properties:
+
+```javascript
+['input', worker({ handler: riskyFunction }), 'output']
+
+// If handler throws, packet becomes:
+// { payload: ..., error: 'Error message' }
+```
+
+---
+
+### Configuration
+
+```javascript
+import { cpus } from 'os';
+
+taskQueue({
+  workers: cpus().length,  // Default: number of CPU cores
+  handler: fn,             // Required: function to run in worker
+})
+
+worker({
+  workers: 4,              // Default: number of CPU cores
+  handler: fn,             // Required: function to run in worker
+})
+
+parallelMap({
+  workers: 4,              // Default: number of CPU cores
+  fn: fn,                  // Required: function to run in worker
+})
+```
+
+---
+
+### When to Use Workers
+
+✅ **Use workers for:**
+- Mathematical computations (crypto, statistics, ML inference)
+- Image/video processing
+- Data parsing (large JSON, CSV)
+- Compression/decompression
+- Any task taking >50ms
+
+❌ **Don't use workers for:**
+- Simple transformations (`x * 2`)
+- I/O-bound tasks (use async/await instead)
+- Tasks needing DOM access (workers can't touch DOM)
+- Very small tasks (worker overhead > computation)
+
+The overhead of sending data to a worker and back is ~1-5ms. If your task takes less than that, just run it in the main thread.
+
 ## Project Structure
 
 ```

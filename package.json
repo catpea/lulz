@@ -13,6 +13,7 @@
   "scripts": {
     "test": "node test.js",
     "examples": "node examples.js",
+    "examples:queue": "node examples-queue.js",
     "save": "git add .; git commit -m 'Updated Release'; npm version patch; npm publish; git push --follow-tags;"
   },
   "keywords": [
